@@ -24,6 +24,10 @@ from models.cifar.bit import BitLinear, BitConv2d
 
 from utils import Bar, Logger, AverageMeter, accuracy, mkdir_p, savefig
 import util
+# Importing for plotting weight distribution
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import norm
 
 
 model_names = sorted(name for name in models.__dict__
@@ -36,7 +40,7 @@ parser.add_argument('-d', '--dataset', default='cifar10', type=str)
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 # Optimization options
-parser.add_argument('--epochs', default=300, type=int, metavar='N',
+parser.add_argument('--epochs', default=100, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
@@ -44,37 +48,37 @@ parser.add_argument('--train-batch', default=128, type=int, metavar='N',
                     help='train batchsize')
 parser.add_argument('--test-batch', default=100, type=int, metavar='N',
                     help='test batchsize')
-parser.add_argument('--Nbits', default=4, type=int, metavar='N',
+parser.add_argument('--Nbits', default=8, type=int, metavar='N',
                     help='Number of bits in conv layer')
 parser.add_argument('--act', default=4, type=int, metavar='N',
                     help='Activation precision')
 parser.add_argument('--bin', action='store_true', default=False,
                     help='Use binary format of the model')
-parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+parser.add_argument('--lr', '--learning-rate', default=0.01, type=float,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--drop', '--dropout', default=0, type=float,
                     metavar='Dropout', help='Dropout ratio')
-parser.add_argument('--schedule', type=int, nargs='+', default=[150, 225],
+parser.add_argument('--schedule', type=int, nargs='+', default=[150, 250],
                         help='Decrease learning rate at these epochs.')
 parser.add_argument('--gamma', type=float, default=0.1, help='LR is multiplied by gamma on schedule.')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
-parser.add_argument('--weight-decay', '--wd', default=5e-4, type=float,
+parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)')
 # Checkpoints
-parser.add_argument('-c', '--checkpoint', default='checkpoint', type=str, metavar='PATH',
+parser.add_argument('-c', '--checkpoint', default='checkpoints/cifar10/xxx-ft', type=str, metavar='PATH',
                     help='path to save checkpoint (default: checkpoint)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
-parser.add_argument('--model', type=str, default=None,
+parser.add_argument('--model', type=str, default='checkpoints/cifar10/xxx-mp/checkpoint.pth.tar',
                     help='log file name')   
 # Architecture
-parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet20',
+parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet',
                     choices=model_names,
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
-parser.add_argument('--depth', type=int, default=29, help='Model depth.')
+parser.add_argument('--depth', type=int, default=20, help='Model depth.')
 parser.add_argument('--block-name', type=str, default='BasicBlock',
                     help='the building block for Resnet and Preresnet: BasicBlock, Bottleneck (default: Basicblock for cifar10/cifar100)')
 parser.add_argument('--cardinality', type=int, default=8, help='Model cardinality (group).')
@@ -231,6 +235,7 @@ def main():
                     'best_acc': best_acc,
                     'optimizer' : optimizer.state_dict(),
                 }, is_best, checkpoint=args.checkpoint)
+        plot_weight_distribution(model,'C:\\Users\\雨乐\\OneDrive\\桌面\\BSQ-master\\BSQ-master\\png')
     else:
         optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     
@@ -294,7 +299,7 @@ def main():
                 'best_acc': best_acc,
                 'optimizer' : optimizer.state_dict(),
             }, is_best, checkpoint=args.checkpoint)
-
+        plot_weight_distribution(model,'C:\\Users\\雨乐\\OneDrive\\桌面\\BSQ-master\\BSQ-master\\png')
     logger.close()
     #logger.plot()
     #savefig(os.path.join(args.checkpoint, 'log.eps'))
@@ -358,7 +363,7 @@ def train(trainloader, model, criterion, optimizer, epoch, use_cuda):
         data_time.update(time.time() - end)
 
         if use_cuda:
-            inputs, targets = inputs.cuda(), targets.cuda(async=True)
+            inputs, targets = inputs.cuda(), targets.cuda(non_blocking=True)
         inputs, targets = torch.autograd.Variable(inputs), torch.autograd.Variable(targets)
 
         # compute output
@@ -385,7 +390,6 @@ def train(trainloader, model, criterion, optimizer, epoch, use_cuda):
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-
         # plot progress
         bar.suffix  = '(Epoch:{epoch} ({batch}/{size}) Data: {data:.3f}s | Batch: {bt:.3f}s | Total: {total:} | ETA: {eta:} | Loss: {loss:.4f} | top1: {top1: .4f} | top5: {top5: .4f}'.format(
                     epoch=epoch,
@@ -468,5 +472,35 @@ def adjust_learning_rate(optimizer, epoch):
         for param_group in optimizer.param_groups:
             param_group['lr'] = state['lr']
 
+
+def plot_weight_distribution(model, save_dir):
+    # 遍历模型的每一层
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.Conv2d) or isinstance(module, torch.nn.Linear):
+            # 获取权重数据并转换为numpy数组
+            weights = module.weight.data.cpu().numpy().flatten()
+
+            # 统计权重数据
+            mean = np.mean(weights)
+            std = np.std(weights)
+
+            # 绘制权重分布图
+            plt.figure()
+            plt.hist(weights, bins=50, density=True, alpha=0.6, color='g')
+
+            # 拟合正态分布曲线
+            xmin, xmax = plt.xlim()
+            x = np.linspace(xmin, xmax, 100)
+            p = norm.pdf(x, mean, std)
+            plt.plot(x, p, 'k', linewidth=2)
+            title = f'Weight Distribution - Layer {name}\n(mean={mean:.2f}, std={std:.2f})'
+            plt.title(title)
+            plt.xlabel('Weight Value')
+            plt.ylabel('Density')
+            plt.savefig(os.path.join(save_dir, f'weight_distribution_{name}.png'))
+            plt.close()
+
+if __name__ == '__main__':
+    main()
 if __name__ == '__main__':
     main()
